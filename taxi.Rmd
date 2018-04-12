@@ -1,0 +1,38 @@
+---
+title: "NYC Taxi"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r echo=TRUE}
+taxi<-read.csv("full_data.csv")
+set.seed(42)
+summary(taxi)
+p=cbind(taxi$pickup_longitude,taxi$pickup_latitude)
+logic=p[,1]>-74.02 & p[,1]< -73.77 & p[,2]>40.63 & p[,2]<40.84
+pickup.location=p[logic,]
+
+pickup.1<-kmeans(pickup.location,nstart = 20,centers = 4)
+plot(pickup.location,col=pickup.1$cluster+1,xlim = c(-74.02,-73.77),ylim = c(40.63,40.84))
+
+pickup.hc<-hclust(dist(pickup.location),method = "single") 
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
