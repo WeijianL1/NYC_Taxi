@@ -13,26 +13,150 @@ This is an R Markdown document. Markdown is a simple formatting syntax for autho
 
 When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
 
-```{r cars}
-summary(cars)
-```
 
 ## Including Plots
 
 You can also embed plots, for example:
 
 ```{r echo=TRUE}
-taxi<-read.csv("full_data.csv")
-set.seed(42)
-summary(taxi)
-p=cbind(taxi$pickup_longitude,taxi$pickup_latitude)
-logic=p[,1]>-74.02 & p[,1]< -73.77 & p[,2]>40.63 & p[,2]<40.84
-pickup.location=p[logic,]
+if(!require('gbm')){install.packages('gbm');library('gbm')}
+if(!require('randomForest')){install.packages('randomForest');library('randomForest')} # visualisation
+if(!require('ggplot2')){install.packages('ggplot2');library('ggplot2')} # visualisation
+if(!require('scales')){install.packages('scales');library('scales')} # visualisation
+if(!require('grid')){install.packages('grid');library('grid')} # visualisation
+if(!require('RColorBrewer')){install.packages('RColorBrewer');library('RColorBrewer')} # visualisation
+if(!require('corrplot')){install.packages('corrplot');library('corrplot')} # visualisation
+if(!require('alluvial')){install.packages('alluvial');library('alluvial')} # visualisation
+if(!require('dplyr')){install.packages('dplyr');library('dplyr')} # data manipulation
+if(!require('readr')){install.packages('readr');library('readr')} # input/output
+if(!require('MASS')){install.packages('MASS');library('MASS')} # data wrangling
+if(!require('cluster')){install.packages('cluster');library('cluster')} # data wrangling
+if(!require('tibble')){install.packages('tibble');library('tibble')} # data wrangling
+if(!require('tidyr')){install.packages('tidyr');library('tidyr')} # data wrangling
+if(!require('stringr')){install.packages('stringr');library('stringr')} # string manipulation
+if(!require('forcats')){install.packages('forcats');library('forcats')} # factor manipulation
+if(!require('lubridate')){install.packages('lubridate');library('lubridate')} # date and time
+if(!require('geosphere')){install.packages('geosphere');library('geosphere')} # geospatial locations
+if(!require('leaflet')){install.packages('leaflet');library('leaflet')} # maps
+if(!require("splines")) { install.packages("splines", repos = "http://cran.us.r-project.org"); library("splines") }
+if(!require('maps')){install.packages('maps');library('maps')} # maps
+if(!require('xgboost')){install.packages('xgboost');library('xgboost')} # modelling
+if(!require('caret')){install.packages('caret');library('caret')} # modelling
+if(!require('forcats')){install.packages('forcats');library('forcats')}
+if(!require('leaflet.extras')){install.packages('leaflet.extras');library('leaflet.extras')}
+if(!require('gam')){install.packages('gam');library('gam')}
+if(!require('gpuR')){install.packages('gpuR');library('gpuR')}
 
-pickup.1<-kmeans(pickup.location,nstart = 20,centers = 4)
-plot(pickup.location,col=pickup.1$cluster+1,xlim = c(-74.02,-73.77),ylim = c(40.63,40.84))
-
-pickup.hc<-hclust(dist(pickup.location),method = "single") 
+library('dplyr')
+library(data.table)
+# taxi<-read.csv("full_data.csv")
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+```{r}
+set.seed(4)
+
+taxi_pca <- fread("cleaned_taxi2.csv")
+full_data <- fread("full_data.csv")
+```
+
+```{r}
+taxi<- full_data %>%
+  filter(passenger_count>0,vendor_id==1,total_distance>0, total_distance<30000, 
+         trip_duration < 3*3600, trip_duration > 0)
+
+summary(taxi)
+
+# Removing the variables that we do not need 
+taxi <- taxi %>% dplyr::select(-id) %>% 
+  dplyr::select(-vendor_id) %>% 
+  dplyr::select(-store_and_fwd_flag) %>% 
+  dplyr::select(-V1)
+
+taxi <- taxi %>% dplyr::select(-pickup_datetime)
+taxi <- taxi %>% dplyr::select(-dropoff_datetime)
+taxi <- taxi %>% dplyr::select(-blizzard)
+taxi <- taxi %>% dplyr::select(-bearing)
+taxi <- taxi %>% dplyr::select(-dist)
+taxi <- taxi %>% dplyr::select(-jfk_dist_pick)
+taxi <- taxi %>% dplyr::select(-jfk_dist_drop)
+taxi <- taxi %>% dplyr::select(-jfk_trip)
+taxi <- taxi %>% dplyr::select(-lg_dist_pick)
+taxi <- taxi %>% dplyr::select(-lg_dist_drop)
+taxi <- taxi %>% dplyr::select(-lg_trip)
+taxi <- taxi %>% dplyr::select(-fastest_speed)
+taxi <- taxi %>% dplyr::select(-speed)
+taxi <- taxi %>% dplyr::select(-date)
+taxi <- taxi %>% dplyr::select(-total_travel_time)
+taxi <- taxi %>% dplyr::select(-fast_speed_trip)
+taxi <- taxi %>% dplyr::select(-work)
+
+taxi$passenger_count <- as.numeric(taxi$passenger_count)
+taxi$month <- as.factor(taxi$month)
+taxi$wday <- as.factor(taxi$wday)
+taxi$hour <- as.numeric(taxi$hour)
+summary(taxi)
+```
+
+```{r}
+# PCA 
+pr.out=prcomp(taxi.train[,-6], scale=TRUE)
+pr.out$rotation
+
+pr.var=pr.out$sdev ^2
+pve=pr.var/sum(pr.var)
+plot(pve, xlab="Principal Component", ylab="Proportion of Variance Explained", ylim=c(0,1), type="b")
+plot(cumsum(pve), xlab="Principal Component", ylab="Cumulative Proportion of Variance Explained", ylim=c(0,1), type="b")
+
+cumsum(pve)
+# we can see that we will use 16 PCs (where the PC reach 90%)
+
+taxi_pca = prcomp(taxi.train[,-6])$x[,1:16]
+
+names(taxi_data)[names(taxi_data) == "V17"] = "trip_duration"
+summary(taxi_data)
+
+# run linear regression on the PCA data 
+lm.fit = lm(trip_duration~.,data = taxi_data)
+summary(lm.fit)
+```
+
+
+```{r}
+valid=sample(1:NROW(taxi),size = NROW(taxi)/2)
+taxi.train=taxi[-valid,]
+taxi.valid=taxi[valid,]
+pred.data<- taxi.valid %>% dplyr::select(-trip_duration)
+train.newdata<- taxi.train %>% dplyr::select(-trip_duration)
+gam.taxi=gam(trip_duration~.,data = taxi.train,family = "gaussian")
+gam.pred=predict.Gam(gam.taxi,newdata = pred.data)
+mean((gam.pred-taxi.valid$trip_duration)^2)
+
+
+# fit.rf <- randomForest(trip_duration~.,data=taxi.train,mtry=13,importance=TRUE)
+
+
+
+pows <- seq(-10, -0.2, by = 0.1)
+lambdas <- 10^pows
+# lambdas <- c(0.1,0.01,0.001)
+train.error=c() 
+test.error=c() 
+counter=0
+for (i in lambdas) {
+  counter=counter+1
+  boosting.tree=gbm(trip_duration~.,data = taxi.train,distribution ="gaussian",n.trees = 1000,shrinkage = i)
+  pred.boosting.train=predict(boosting.tree,newdata=taxi.train,n.trees=1000,type="response")
+  pred.boosting.train.round=round(pred.boosting.train) 
+  pred.boosting.test=predict(boosting.tree,newdata=taxi.valid,n.trees=1000,type="response") 
+  pred.boosting.test.round=round(pred.boosting.test)
+  train.error[counter]=mean((pred.boosting.train.round-taxi.train$trip_duration)^2)
+  test.error[counter]=mean((pred.boosting.test.round-taxi.valid$trip_duration)^2)
+  print(c(counter,"/",length(lambdas)))
+}
+
+plot(lambdas,train.error,type="b",xlab="Shrinkage",ylab="Training Error")
+plot(lambdas,test.error,type="b",xlab="Shrinkage",ylab="test Error")
+summary(boosting.tree)
+
+
+```
