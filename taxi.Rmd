@@ -40,12 +40,16 @@ if(!require('geosphere')){install.packages('geosphere');library('geosphere')} # 
 if(!require('leaflet')){install.packages('leaflet');library('leaflet')} # maps
 if(!require("splines")) { install.packages("splines", repos = "http://cran.us.r-project.org"); library("splines") }
 if(!require('maps')){install.packages('maps');library('maps')} # maps
-if(!require('xgboost')){install.packages('xgboost');library('xgboost')} # modelling
+# if(!require('xgboost')){install.packages('xgboost');library('xgboost')} # modelling
 if(!require('caret')){install.packages('caret');library('caret')} # modelling
 if(!require('forcats')){install.packages('forcats');library('forcats')}
 if(!require('leaflet.extras')){install.packages('leaflet.extras');library('leaflet.extras')}
 if(!require('gam')){install.packages('gam');library('gam')}
-if(!require('gpuR')){install.packages('gpuR');library('gpuR')}
+# if(!require('gpuR')){install.packages('gpuR');library('gpuR')}
+if(!require('data.table')){install.packages('data.table');library('data.table')}
+if(!require('bigmemory')){install.packages('bigmemory');library('bigmemory')}
+if(!require('biganalytics')){install.packages('biganalytics');library('biganalytics')}
+
 
 library('dplyr')
 library(data.table)
@@ -56,6 +60,7 @@ library(data.table)
 set.seed(4)
 
 taxi_pca <- fread("cleaned_taxi2.csv")
+
 full_data <- fread("full_data.csv")
 ```
 
@@ -65,6 +70,8 @@ taxi<- full_data %>%
          trip_duration < 3*3600, trip_duration > 0)
 
 summary(taxi)
+
+# taxi_pca <- taxi_pca %>% dplyr::select(-V1)
 
 # Removing the variables that we do not need 
 taxi <- taxi %>% dplyr::select(-id) %>% 
@@ -94,48 +101,116 @@ taxi$passenger_count <- as.numeric(taxi$passenger_count)
 taxi$month <- as.factor(taxi$month)
 taxi$wday <- as.factor(taxi$wday)
 taxi$hour <- as.numeric(taxi$hour)
-summary(taxi)
+# summary(taxi)
 ```
 
 ```{r}
-# PCA 
-pr.out=prcomp(taxi.train[,-6], scale=TRUE)
-pr.out$rotation
-
-pr.var=pr.out$sdev ^2
-pve=pr.var/sum(pr.var)
-plot(pve, xlab="Principal Component", ylab="Proportion of Variance Explained", ylim=c(0,1), type="b")
-plot(cumsum(pve), xlab="Principal Component", ylab="Cumulative Proportion of Variance Explained", ylim=c(0,1), type="b")
-
-cumsum(pve)
-# we can see that we will use 16 PCs (where the PC reach 90%)
-
-taxi_pca = prcomp(taxi.train[,-6])$x[,1:16]
-
-names(taxi_data)[names(taxi_data) == "V17"] = "trip_duration"
-summary(taxi_data)
-
-# run linear regression on the PCA data 
-lm.fit = lm(trip_duration~.,data = taxi_data)
-summary(lm.fit)
-```
-
-
-```{r}
+#Split dataset
 valid=sample(1:NROW(taxi),size = NROW(taxi)/2)
 taxi.train=taxi[-valid,]
 taxi.valid=taxi[valid,]
 pred.data<- taxi.valid %>% dplyr::select(-trip_duration)
 train.newdata<- taxi.train %>% dplyr::select(-trip_duration)
+
+
+```
+
+```{r}
+
+# PCA 
+pr.out=prcomp(taxi_pca[,-6], scale=TRUE)
+
+pr.var=pr.out$sdev^2
+pve=pr.var/sum(pr.var)
+plot(pve, xlab="Principal Component", ylab="Proportion of Variance Explained", ylim=c(0,1), type="b")
+plot(cumsum(pve), xlab="Principal Component", ylab="Cumulative Proportion of Variance Explained", ylim=c(0,1), type="b")
+
+cumsum(pve) # we can see that we will use 16 PCs (where the PC reach 90%)
+
+# get the new PCA reduced dimension data frame 
+taxi_pca2 = prcomp(taxi_pca[,-6])$x[,1:16]
+taxi_data = data.frame(cbind(taxi_pca2,taxi_pca$trip_duration))
+# change the name of V17 
+names(taxi_data)[names(taxi_data) == "V17"] = "trip_duration"
+# summary(taxi_data)
+
+taxi_pca.train=taxi_data[-valid,]
+taxi_pca.valid=taxi_data[valid,]
+pred.dataPCA<- taxi_pca.valid %>% dplyr::select(-trip_duration)
+
+
+gam.taxi_pca=gam(trip_duration~.,data = taxi_data,family = "gaussian")
+gam.pred_pca=predict.Gam(gam.taxi_pca,newdata = pred.dataPCA)
+mean((gam.pred_pca-taxi_pca.valid$trip_duration)^2)
+
+```
+
+
+
+
+```{r}
+#GPU
+COLS=function(vec){
+  cols=rainbow(length(unique(vec)))
+  return(cols[as.numeric(as.factor(vec))])
+}
+if(!require('cluster')){install.packages('cluster');library('cluster')}
+if(!require('flashClust')){install.packages('flashClust');library('flashClust')}
+if(!require('parallelDist')){install.packages('parallelDist');library('parallelDist')}
+location=cbind(taxi.train$pickup_longitude,taxi.train$pickup_latitude)
+sample=sample(1:NROW(location),55000)
+pickup<-as.data.frame(location[sample,]) 
+pickup=pickup %>%
+  filter(pickup[,1]<(-73.77),pickup[,1]>-74.01,pickup[,2]<40.84,pickup[,2]>40.63)
+
+dist=parallelDist(as.matrix(pickup),method = "manhattan")
+
+clust=flashClust(dist,method = "average",members = NULL)
+grp4=cutree(clust,k=6)
+# clusplot(location[sample,],grp4,color = TRUE,shade = TRUE,labels=1, lines=0)
+# plot(location[sample,],col=COLS(grp4),asp=3)
+pickup  %>%
+  ggplot(aes(pickup[,1], pickup[,2], color = COLS(grp4))) +
+  geom_point(size=0.1, alpha = 0.5) +
+  coord_cartesian(xlim = c(-74.02,-73.77), ylim = c(40.63,40.84)) +
+  # facet_wrap(~ COLS(grp4)) +
+  #guides(color = guide_legend(override.aes = list(alpha = 1, size = 4))) +
+  theme(legend.position = "none")
+```
+
+```{r}
+# gpu_long<-gpuMatrix(taxi.train$pickup_longitude,nrow = NROW(taxi.train),ncol=1,type = integer)
+# gpu_lat<-gpuMatrix(taxi.train$pickup_latitude,nrow = NROW(taxi.train),ncol=1,type = integer)
+# 
+# distGPU=distance(gpu_lat,gpu_long,method = "euclidean")
+# 
+# 
+# euDist<-function(matrix){
+#   return(parallelDist(matrix,method = "euclidean"))
+# }
+# bigDist=as.big.matrix(cbind(taxi.train$pickup_longitude,taxi.train$pickup_latitude))
+# dist=biganalytics::apply(bigDist,2,FUN=dist,method="euclidean")
+# 
+# distM=as.matrix(dist,NROW(taxi.train),ncol=NROW(taxi.train))
+# clust=flashClust(dist,method = "single",members = NULL)
+
+```
+
+```{r}
+#GAM-normal
 gam.taxi=gam(trip_duration~.,data = taxi.train,family = "gaussian")
 gam.pred=predict.Gam(gam.taxi,newdata = pred.data)
 mean((gam.pred-taxi.valid$trip_duration)^2)
 
+```
 
-# fit.rf <- randomForest(trip_duration~.,data=taxi.train,mtry=13,importance=TRUE)
+```{r}
+#random Forest
+fit.rf <- randomForest(trip_duration~.,data=taxi.train,mtry=13,importance=TRUE)
+```
 
-
-
+```{r}
+#TUNE LAMBDA for boosting
 pows <- seq(-10, -0.2, by = 0.1)
 lambdas <- 10^pows
 # lambdas <- c(0.1,0.01,0.001)
@@ -157,6 +232,33 @@ for (i in lambdas) {
 plot(lambdas,train.error,type="b",xlab="Shrinkage",ylab="Training Error")
 plot(lambdas,test.error,type="b",xlab="Shrinkage",ylab="test Error")
 summary(boosting.tree)
+#use 0.1
+```
 
+```{r}
+#TUNE number of trees for Boosting
+set.seed(42)
+b=seq(50,58*50,by=50)
+train.error=c() 
+test.error=c() 
+counter=0
+for (i in b) {
+  counter=counter+1
+  boosting.tree=gbm(trip_duration~.,data = taxi.train,distribution ="gaussian",n.trees = i,shrinkage = 0.1)
+  pred.boosting.train=predict(boosting.tree,newdata=taxi.train,n.trees=i,type="response")
+  pred.boosting.test=predict(boosting.tree,newdata=taxi.valid,n.trees=i,type="response") 
+  train.error[counter]=mean((pred.boosting.train-taxi.train$trip_duration)^2)
+  test.error[counter]=mean((pred.boosting.test-taxi.valid$trip_duration)^2)
+  print(c(counter,"/",length(b)))
+}
 
+plot(b,train.error,type="b",xlab="B",ylab="Training Error")
+plot(b,test.error,type="b",xlab="B",ylab="test Error")
+summary(boosting.tree)
+
+#choose i=0.1,b=2000
+
+boosting.tree=gbm(trip_duration~.,data = taxi.train,distribution ="gaussian",n.trees = 2000,shrinkage = 0.1)
+pred.boosting.test=predict(boosting.tree,newdata=taxi.valid,n.trees=2000,type="response") 
+mean((pred.boosting.test-taxi.valid$trip_duration)^2)
 ```
